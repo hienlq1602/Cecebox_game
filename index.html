@@ -91,7 +91,31 @@ function loadSave(){
   return {stars:{},hero:null,lv:{}};
 }
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(save))}catch(e){}}
-function giveStars(k,n){if(n>(save.stars[k]||0))save.stars[k]=n;persist()}
+var LOG_URL='https://script.google.com/macros/s/AKfycbyRaaT7fAlw-T-9uJaF1DweOGyzDprYcVibG8zSpxtH25WVEJgcCpxk_f2hLMcuQ8xI5Q/exec';
+var LOG_KEY='cece-747fc40cdfb5';
+var GAME_NAMES={fry:'Ca chiên',quiz:'Bạn là hệ gà nào?',mem:'Lật thẻ ghép đôi',cash:'Thu ngân tập sự',srv:'Ra món cho khách',wait:'Chạy bàn',whack:'Gà ló đầu'};
+var QKEY='goc-giai-tri-queue',flushing=false,curGame='';
+function p2(n){return (n<10?'0':'')+n}
+function dayStr(){var d=new Date();return d.getFullYear()+'-'+p2(d.getMonth()+1)+'-'+p2(d.getDate())}
+function timeStr(){var d=new Date();return dayStr()+' '+p2(d.getHours())+':'+p2(d.getMinutes())+':'+p2(d.getSeconds())}
+function readQ(){try{var q=JSON.parse(localStorage.getItem(QKEY));return Array.isArray(q)?q:[]}catch(e){return []}}
+function writeQ(q){try{localStorage.setItem(QKEY,JSON.stringify(q))}catch(e){}}
+function flushLog(){
+  if(!LOG_URL||!LOG_KEY||flushing)return;
+  var q=readQ();if(!q.length)return;
+  flushing=true;
+  try{
+    fetch(LOG_URL,{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({key:LOG_KEY,rows:q.slice(0,50)})})
+      .then(function(){writeQ(readQ().slice(Math.min(q.length,50)));flushing=false})
+      .catch(function(){flushing=false});
+  }catch(e){flushing=false}
+}
+function logEvent(ev,game,lv,stars){
+  if(!save.nick)return;
+  var row=[timeStr(),dayStr(),save.nick,save.did||'',ev,GAME_NAMES[game]||game||'',lv==null?'':(LVN[lv]||''),stars==null?'':stars];
+  var q=readQ();q.push(row);if(q.length>300)q=q.slice(-300);writeQ(q);flushLog();
+}
+function giveStars(k,n){if(n>(save.stars[k]||0))save.stars[k]=n;persist();logEvent('finish',k,save.lv[k],n)}
 function totalStars(){var t=0;GAMES.forEach(function(k){t+=save.stars[k]||0});return t}
 function rank(n){var m=GAMES.length*3;return n>=m*0.8?'Fan cứng gà rán':n>=m*0.55?'Sành gà':n>=m*0.3?'Tập sự':'Khách mới'}
 function starStr(n){return '★'.repeat(n)+'☆'.repeat(3-n)}
@@ -120,13 +144,13 @@ function levelScreen(key,title,intro,descs,start){
     $('ld').textContent=descs[lv];
   }
   each('.seg button',function(b,i){b.addEventListener('click',function(){lv=i;sel()})});
-  $('ls').addEventListener('click',function(){save.lv[key]=lv;persist();start(lv)});
+  $('ls').addEventListener('click',function(){save.lv[key]=lv;curGame=key;persist();logEvent('start',key,lv);start(lv)});
   sel();
 }
 function endScreen(title,resultHtml,l,again,lvlFn){
   app.innerHTML=shell(title,resultHtml+'<button class="btn pri" id="ag">Chơi lại độ '+LVN[l]+'</button><div style="height:8px"></div><button class="btn" id="lv2">Đổi độ khó</button><div style="height:8px"></div><button class="btn" id="hm">Về góc giải trí</button>');
   bindBack();
-  $('ag').addEventListener('click',function(){again(l)});
+  $('ag').addEventListener('click',function(){logEvent('start',curGame,l);again(l)});
   $('lv2').addEventListener('click',function(){nav(lvlFn)});
   $('hm').addEventListener('click',function(){nav(home)});
 }
@@ -134,7 +158,28 @@ function resultCard(small,big,n,line){
   return '<div class="result"><div class="small">'+esc(small)+'</div><div class="big">'+esc(big)+'</div>'+(line?'<p style="font-weight:600">'+esc(line)+'</p>':'')+'<div class="stars" style="font-size:24px">'+starStr(n)+'</div></div>';
 }
 
+
+function cleanNick(v){return String(v||'').replace(/[\u0000-\u001f<>"'`\\=+@]/g,'').replace(/\s+/g,' ').trim().slice(0,20)}
+function askNick(change){
+  var h='<span class="tag">'+esc(BRAND)+'</span><h1>Góc giải trí</h1><p class="sub">'+(change?'Bạn muốn đổi biệt danh thành gì nè?':'Bạn tên gì nè? Nhập một biệt danh để vào chơi nhé!')+'</p>'+
+  '<div class="card"><label for="nk" style="font-weight:700;display:block;margin-bottom:6px">Biệt danh của bạn</label><input id="nk" type="text" maxlength="20" autocomplete="off" placeholder="Ví dụ: Gà Con" value="'+esc(change?save.nick||'':'')+'" style="width:100%;min-height:48px;font-size:18px;padding:8px 12px;border:2px solid #ead9c6;border-radius:12px;box-sizing:border-box"><div id="nke" class="small" style="color:#B54316;min-height:20px;margin-top:6px" role="alert"></div></div>'+
+  '<button class="btn pri" id="nkb">'+(change?'Lưu biệt danh':'Vào chơi')+'</button>'+
+  '<p class="small" style="margin-top:10px">Quán chỉ lưu biệt danh và số lượt chơi để thống kê. Bạn không cần nhập số điện thoại hay thông tin cá nhân.</p>'+(change?'<button class="back" id="nkc">← Quay lại</button>':'');
+  app.innerHTML=h;
+  function go(){
+    var v=cleanNick($('nk').value);
+    if(v.length<2){$('nke').textContent='Biệt danh cần từ 2 ký tự trở lên nhé.';return}
+    var first=!save.nick;
+    save.nick=v;if(!save.did)save.did='d'+Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+    persist();if(first||change)logEvent('open');
+    nav(home);
+  }
+  $('nkb').addEventListener('click',go);
+  $('nk').addEventListener('keydown',function(e){if(e.key==='Enter')go()});
+  if(change)$('nkc').addEventListener('click',function(){nav(home)});
+}
 function home(){
+  if(!save.nick){askNick(false);return}
   var t=totalStars(),M=GAMES.length*3;
   var games=[
     {k:'fry',n:'Ca chiên',d:'Vớt gà đúng lúc vàng giòn. Kỹ năng và canh nhịp.',m:'3 đến 5 phút',f:fry},
@@ -145,7 +190,8 @@ function home(){
     {k:'wait',n:'Chạy bàn',d:'Mang đúng món ra từng bàn trước khi khách mất kiên nhẫn.',m:'2 đến 4 phút',f:wait},
     {k:'whack',n:'Gà ló đầu',d:'Phản xạ: chạm gà, tránh bẫy.',m:'1 phút',f:whack}
   ];
-  var h='<span class="tag">'+esc(BRAND)+'</span><h1>Góc giải trí</h1><p class="sub">Món sắp lên rồi, chơi một ván cho vui nhé! Game nào cũng có 3 độ khó, món tới là dừng liền.</p>';
+  var gr='<div class="row small" style="margin:0 0 8px"><span>Xin chào, <b>'+esc(save.nick)+'</b></span><button class="back" id="chn" style="padding:4px 0">Đổi biệt danh</button></div>';
+  var h=gr+'<span class="tag">'+esc(BRAND)+'</span><h1>Góc giải trí</h1><p class="sub">Món sắp lên rồi, chơi một ván cho vui nhé! Game nào cũng có 3 độ khó, món tới là dừng liền.</p>';
   h+='<div class="card pass"><div class="row"><b>Hộ chiếu gà</b><span class="stars">'+t+'/'+M+' ★</span></div><div class="bar"><i style="width:'+Math.round(t/M*100)+'%"></i></div><div class="small">Danh hiệu: <b>'+rank(t)+'</b>'+(save.hero?' · Hệ của bạn: '+esc(save.hero):'')+'</div></div>';
   games.forEach(function(g){
     var s=save.stars[g.k]||0;
@@ -153,6 +199,7 @@ function home(){
   });
   h+='<p class="small">Sao cao nhất của mỗi game được lưu trên chính điện thoại của bạn.</p>';
   app.innerHTML=h;
+  var chn=$('chn');if(chn)chn.addEventListener('click',function(){askNick(true)});
   each('[data-g]',function(b){
     var g=games.filter(function(x){return x.k===b.getAttribute('data-g')})[0];
     b.addEventListener('click',function(){nav(g.f)});
@@ -371,7 +418,7 @@ function fryPlay(){
     msg.textContent='';
     go.textContent=o>=N()-1?'Xem kết quả':'Đơn tiếp theo';
   }
-  function reset(){o=0;total=0;combo=0;maxCombo=0;lives=LV[lv].lives;startOrder()}
+  function reset(){o=0;total=0;combo=0;maxCombo=0;lives=LV[lv].lives;logEvent('start','fry',lv);startOrder()}
   btn.forEach(function(b,i){b.addEventListener('click',function(){take(i)})});
   dbt.forEach(function(b,i){b.addEventListener('click',function(){if(st==='idle'||st==='over')setLevel(i)})});
   go.addEventListener('click',function(){
@@ -1127,6 +1174,7 @@ function wait(){
 
 
 
+if(save.nick)logEvent('open');
 home();
 })();
 </script>
